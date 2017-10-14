@@ -6,7 +6,7 @@ import numpy as np
 import os,sys,math
 import orphics.tools.io as io
 
-def random_mini_batches(X, Y, mini_batch_size = 64, seed = 0):
+def random_mini_batches(X, Y, mini_batch_size = 64, seed = None):
     """
     Creates a list of random minibatches from (X, Y)
     
@@ -84,6 +84,10 @@ class FeedForward(object):
         act = self.activations[l]
         if act=="relu":
             return tf.nn.relu(Z)
+        if act=="sigmoid":
+            return tf.nn.sigmoid(Z)
+        if act=="tanh":
+            return tf.nn.tanh(Z)
         elif act=="none":
             return Z
         else:
@@ -101,21 +105,22 @@ class FeedForward(object):
 
         return A
     
-    def cost(self,Z,Y):
-        return tf.squared_difference(Z,Y)
+    def cost(self,Z,Y,beta=0.):
+        reg = beta*tf.add_n([tf.nn.l2_loss(w) for w in self.W])
+        return tf.squared_difference(Z,Y) + reg
 
 
-    def train(self,X_train,Y_train,learning_rate = 0.0001, num_epochs = 1500, minibatch_size = 32):
+    def train(self,X_train,Y_train,learning_rate = 0.0001, num_epochs = 1500, minibatch_size = 32,beta = 0.):
 
         assert X_train.shape[0] == self.num_features
         assert Y_train.shape[0] == self.num_outputs
         m = X_train.shape[1]
         assert Y_train.shape[1] == m
-        tf.set_random_seed(1)
+        #tf.set_random_seed(1)
         seed = 3
 
         Z = self.forward()
-        cost = tf.reduce_mean(self.cost(Z,self.Y))
+        cost = tf.reduce_mean(self.cost(Z,self.Y,beta=beta))
         optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
 
         init = tf.global_variables_initializer()
@@ -176,7 +181,7 @@ class FeedForward(object):
         with tf.Session() as sess:
             sess.run(init)
             Z = self.forward()
-            cost = self.cost(Z,self.Y)
+            cost = tf.reduce_mean(self.cost(Z,self.Y))
             mse = sess.run(cost,feed_dict={self.X:X_test,self.Y:Y_test})
         return mse
         
@@ -190,50 +195,116 @@ def prepare(images):
 
     scaler = StandardScaler()
     std_scale = scaler.fit(images)
-    return std_scale.transform(images)
+    scaled = std_scale.transform(images)
+    return scaled
 
-def sim(num_images,ny=32,nx=32,num_outputs=2):
+def sim_tile(num_images,ny=32,nx=32,num_outputs=2):
     m = num_images
     Y_train = np.random.uniform(1,10,size=(num_outputs,m)).astype(np.float32)
-    training_images = np.random.random((ny,nx,m)).astype(np.float32)
+    Y_bayes = np.zeros(shape=(num_outputs,m)).astype(np.float32)
+    training_images = np.random.normal(loc=0.,scale=1.,size=(ny,nx,m)).astype(np.float32)
     training_images[:ny//2,:nx//2,:] += Y_train[0,:]
     training_images[ny//2:,nx//2:,:] += Y_train[1,:]
-    return training_images,Y_train
 
+    Y_bayes[0,:] = training_images[:ny//2,:nx//2,:].mean(axis=(0,1))
+    Y_bayes[1,:] = training_images[ny//2:,nx//2:,:].mean(axis=(0,1))
+    return training_images,Y_train, Y_bayes
+
+
+def sim_gal(num_images,ny,nx,seed=None):
+    from enlib import enmap
+    
+    arcsec = 32.
+    assert ny==nx
+    px_arcsec = arcsec/ny
+    shape,wcs = enmap.rect_geometry(arcsec/60.,px_arcsec/60.,proj="car",pol=False)
+    Ny,Nx = shape
+    assert ny==Ny
+    assert nx==Nx
+    
+    sec2rad = lambda x: x*np.pi/180./3600.
+
+    m = num_images
+    arange = [sec2rad(3),sec2rad(12)] 
+    brange = [sec2rad(3),sec2rad(12)]
+    angle_range = [0,2.*np.pi]
+
+    import sims
+    esim = sims.EllipseSim(shape,wcs)
+    mat,amajors,bminors,angles = esim.get_sims(m,arange,brange,angle_range,seed=seed)
+    amajors = amajors * 180.*3600./np.pi
+    bminors = bminors * 180.*3600./np.pi
+    
+    training_images = np.moveaxis(mat,0,2) + np.random.normal(loc=0.,scale=1.e-1,size=(ny,nx,m)).astype(np.float32)
+    print ("Megabytes : ", training_images.nbytes/1024./1024.)
+
+    Y_train = np.vstack((amajors,bminors))
+    Y_bayes = None
+    return training_images,Y_train, Y_bayes
+    
 
 num_outputs = 2 # the two ellipticity components
-m = 1000000
-ny = nx = 16
-num_nodes = [32,16]
+m = 50000
+ny = nx = 32
+num_nodes = [24]
+activations = None #[] #None 
+beta = 0. #005
+mini_batch_size = 128
+learning_rate = 0.0001
+num_epochs = int(1e9)
 
-training_images,Y_train = sim(m,ny,nx,num_outputs)
+alpha_scale = 2
+optimal_hidden = int(m*1./(alpha_scale*(num_outputs+ny*nx)))
+print ("Optimal number of hidden layers : ",optimal_hidden)
+
+#training_images,Y_train, Ytrain_bayes = sim(m,ny,nx,num_outputs)
+training_images,Y_train, Ytrain_bayes = sim_gal(m,ny,nx,seed=100)
 
 img = training_images[:,:,0]
 io.quickPlot2d(img,"img.png")
+
 Npix = img.size
-my_net = FeedForward(num_features=Npix,num_outputs=num_outputs,num_nodes=num_nodes)
+my_net = FeedForward(num_features=Npix,num_outputs=num_outputs,num_nodes=num_nodes,activations=activations)
 
 
 X_train = prepare(training_images)
-
-my_net.train(X_train,Y_train,learning_rate = 0.0001, num_epochs = 200, minibatch_size = 32)
+my_net.train(X_train,Y_train,learning_rate = learning_rate, num_epochs = num_epochs,minibatch_size = mini_batch_size,beta=beta)
 
 ntest = 1000
-test_images,Y_test = sim(ntest,ny,nx,num_outputs)
+test_images,Y_test, Ytest_bayes = sim_gal(ntest,ny,nx,seed=200)
+#test_images,Y_test, Ytest_bayes = sim(ntest,ny,nx,num_outputs)
 X_test = prepare(test_images)
 
 
-print (Y_test)
-Y_pred = my_net.predict(X_test)
-Y_rand = np.random.uniform(1,10,size=(num_outputs,ntest))
+Y_pred_train = my_net.predict(X_train)
+Y_pred_test = my_net.predict(X_test)
+#Y_rand = np.random.uniform(1,10,size=(num_outputs,ntest))
 
-err = (Y_pred-Y_test)
-err_rand = (Y_rand-Y_test)
+print ("Cost on training: ",my_net.test(X_train,Y_train))
+mse = my_net.test(X_test,Y_test)
+print ("Cost on test: ",mse)
+
+print (Y_test[0,:10])
+print (Y_pred_test[0,:10])
+print (Y_test[1,:10])
+print (Y_pred_test[1,:10])
+
+
+stdev = np.sqrt(mse)
+
+err_train = (Y_pred_train-Y_train)
+err_test = (Y_pred_test-Y_test)
+#err_rand = (Y_rand-Y_test)
+#err_bayes = (Ytest_bayes-Y_test)
 plt.clf()
-plt.scatter(err_rand[0,:],err_rand[1,:],alpha=0.1)
-plt.scatter(err[0,:],err[1,:])
+#plt.scatter(err_rand[0,:],err_rand[1,:],alpha=0.1)
+plt.scatter(err_test[0,:],err_test[1,:])
+plt.scatter(err_train[0,:],err_train[1,:],alpha=0.3)
+#plt.scatter(err_bayes[0,:],err_bayes[1,:],alpha=0.1)
 plt.axvline(x=0.,ls="--")
 plt.axhline(y=0.,ls="--")
-plt.xlim(-10,10)
-plt.ylim(-10,10)
+#plt.xlim(-10,10)
+#plt.ylim(-10,10)
+plt.xlim(-5*stdev,5*stdev)
+plt.ylim(-5*stdev,5*stdev)
 plt.savefig("scatter.png")

@@ -180,12 +180,11 @@ def prepare(images):
 num_outputs = 2 # the two ellipticity components
 m = 10000
 ny = nx = 32
-Y_train = np.random.randint(0,10,size=(num_outputs,m))
+Y_train = np.random.randint(1,10,size=(num_outputs,m))
 
 training_images = np.random.random((ny,nx,m))
-for i in range(m):
-    training_images[:ny//2,:nx//2,i] += Y_train[0,i]
-    training_images[ny//2:,nx//2:,i] += Y_train[1,i]
+training_images[:ny//2,:nx//2,:] += Y_train[0,:]
+training_images[ny//2:,nx//2:,:] += Y_train[1,:]
     
 img = training_images[:,:,0]
 import orphics.tools.io as io

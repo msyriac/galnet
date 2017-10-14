@@ -4,6 +4,7 @@ from tensorflow.python.framework import ops
 import matplotlib.pyplot as plt
 import numpy as np
 import os,sys,math
+import orphics.tools.io as io
 
 def random_mini_batches(X, Y, mini_batch_size = 64, seed = 0):
     """
@@ -55,8 +56,8 @@ class FeedForward(object):
     def __init__(self,num_features,num_nodes=[64,32],activations=None,num_outputs=2,seed=None):
 
         
-        self.X = tf.placeholder("float", shape=(num_features,None),name="X")
-        self.Y = tf.placeholder("float", shape=(num_outputs,None),name="Y")
+        self.X = tf.placeholder(tf.float32, shape=(num_features,None),name="X")
+        self.Y = tf.placeholder(tf.float32, shape=(num_outputs,None),name="Y")
         self.num_features = num_features
         self.num_outputs = num_outputs
 
@@ -72,10 +73,11 @@ class FeedForward(object):
         self.W = []
         self.b = []
         wprev = num_features
-        for l in range(self.nlayers):
-            self.W.append (tf.get_variable("W"+str(l), [num_nodes[l],wprev], initializer = tf.contrib.layers.xavier_initializer(seed = seed)))
-            self.b.append (tf.get_variable("b"+str(l), [num_nodes[l],1], initializer = tf.zeros_initializer()))
-            wprev = num_nodes[l]
+        with tf.variable_scope("reuse"):
+            for l in range(self.nlayers):
+                self.W.append (tf.get_variable("W"+str(l), [num_nodes[l],wprev], initializer = tf.contrib.layers.xavier_initializer(seed = seed)))
+                self.b.append (tf.get_variable("b"+str(l), [num_nodes[l],1], initializer = tf.zeros_initializer()))
+                wprev = num_nodes[l]
 
             
     def activate(self,Z,l):
@@ -100,7 +102,7 @@ class FeedForward(object):
         return A
     
     def cost(self,Z,Y):
-        return tf.reduce_mean(tf.squared_difference(Z,Y))
+        return tf.squared_difference(Z,Y)
 
 
     def train(self,X_train,Y_train,learning_rate = 0.0001, num_epochs = 1500, minibatch_size = 32):
@@ -109,11 +111,11 @@ class FeedForward(object):
         assert Y_train.shape[0] == self.num_outputs
         m = X_train.shape[1]
         assert Y_train.shape[1] == m
-        tf.set_random_seed(1)                             # to keep consistent results
+        tf.set_random_seed(1)
         seed = 3
 
         Z = self.forward()
-        cost = self.cost(Z,self.Y)
+        cost = tf.reduce_mean(self.cost(Z,self.Y))
         optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
 
         init = tf.global_variables_initializer()
@@ -123,49 +125,60 @@ class FeedForward(object):
             sess.run(init)
             for epoch in range(num_epochs):
 
-                epoch_cost = 0.                       # Defines a cost related to an epoch
-                num_minibatches = int(m / minibatch_size) # number of minibatches of size minibatch_size in the train set
-                seed = seed + 1
-                minibatches = random_mini_batches(X_train, Y_train, minibatch_size, seed)
+                try:
+                    epoch_cost = 0.                       # Defines a cost related to an epoch
+                    num_minibatches = int(m / minibatch_size) # number of minibatches of size minibatch_size in the train set
+                    seed = seed + 1
+                    minibatches = random_mini_batches(X_train, Y_train, minibatch_size, seed)
 
-                for minibatch in minibatches:
+                    for minibatch in minibatches:
 
-                    # Select a minibatch
-                    (minibatch_X, minibatch_Y) = minibatch
+                        # Select a minibatch
+                        (minibatch_X, minibatch_Y) = minibatch
+
+                        _ , minibatch_cost = sess.run([optimizer, cost], feed_dict={self.X: minibatch_X, self.Y: minibatch_Y})
+
+                        epoch_cost += minibatch_cost / num_minibatches
+
+                    # Print the cost every epoch
+                    if epoch % 10 == 0:
+                        print ("Cost after epoch %i: %f" % (epoch, epoch_cost))
+                    if epoch % 5 == 0:
+                        costs.append(epoch_cost)
+
+                except KeyboardInterrupt:
+                    break
                 
-                    _ , minibatch_cost = sess.run([optimizer, cost], feed_dict={self.X: minibatch_X, self.Y: minibatch_Y})
-                
-                    epoch_cost += minibatch_cost / num_minibatches
-                
-                # Print the cost every epoch
-                if epoch % 10 == 0:
-                    print ("Cost after epoch %i: %f" % (epoch, epoch_cost))
-                if epoch % 5 == 0:
-                    costs.append(epoch_cost)
-                              
             # plot the cost
             plt.plot(np.squeeze(costs))
             plt.ylabel('cost')
             plt.xlabel('iterations (per tens)')
             plt.title("Learning rate =" + str(learning_rate))
-            plt.show()
+            plt.savefig("cost.png")
 
-            # lets save the parameters in a variable
-            # parameters = sess.run(parameters)
-            # weights = sess.run(self.W)
-            # biases = sess.run(self.b)
-
-            print ("Parameters have been trained!")
-
-            # Calculate the correct predictions
-            # correct_prediction = tf.equal(Z, Y)
-
-            # # Calculate accuracy on the test set
-            # accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
-
-            # print ("Train Accuracy:", accuracy.eval({X: X_train, Y: Y_train}))
-            # print ("Test Accuracy:", accuracy.eval({X: X_test, Y: Y_test}))
+            # lets save the parameters
+            for l in range(self.nlayers):
+                self.W[l] = tf.get_variable("W"+str(l), initializer = tf.constant(sess.run(self.W[l])))
+                self.b[l] = tf.get_variable("b"+str(l), initializer = tf.constant(sess.run(self.b[l])))
         
+            
+    def predict(self,X):
+        init = tf.global_variables_initializer()
+        with tf.Session() as sess:
+            sess.run(init)
+            Z = self.forward()
+            Y_pred = sess.run(Z,feed_dict={self.X:X})
+
+        return Y_pred
+        
+    def test(self,X_test,Y_test):
+        init = tf.global_variables_initializer()
+        with tf.Session() as sess:
+            sess.run(init)
+            Z = self.forward()
+            cost = self.cost(Z,self.Y)
+            mse = sess.run(cost,feed_dict={self.X:X_test,self.Y:Y_test})
+        return mse
         
 def prepare(images):
     from sklearn.preprocessing import StandardScaler
@@ -178,27 +191,49 @@ def prepare(images):
     scaler = StandardScaler()
     std_scale = scaler.fit(images)
     return std_scale.transform(images)
-    
-num_outputs = 2 # the two ellipticity components
-m = 10000
-ny = nx = 32
-Y_train = np.random.randint(1,10,size=(num_outputs,m))
 
-training_images = np.random.random((ny,nx,m))
-training_images[:ny//2,:nx//2,:] += Y_train[0,:]
-training_images[ny//2:,nx//2:,:] += Y_train[1,:]
-    
+def sim(num_images,ny=32,nx=32,num_outputs=2):
+    m = num_images
+    Y_train = np.random.uniform(1,10,size=(num_outputs,m)).astype(np.float32)
+    training_images = np.random.random((ny,nx,m)).astype(np.float32)
+    training_images[:ny//2,:nx//2,:] += Y_train[0,:]
+    training_images[ny//2:,nx//2:,:] += Y_train[1,:]
+    return training_images,Y_train
+
+
+num_outputs = 2 # the two ellipticity components
+m = 1000000
+ny = nx = 16
+num_nodes = [32,16]
+
+training_images,Y_train = sim(m,ny,nx,num_outputs)
+
 img = training_images[:,:,0]
-import orphics.tools.io as io
 io.quickPlot2d(img,"img.png")
 Npix = img.size
-my_net = FeedForward(num_features=Npix,num_outputs=num_outputs,num_nodes=[64,32])
+my_net = FeedForward(num_features=Npix,num_outputs=num_outputs,num_nodes=num_nodes)
 
 
 X_train = prepare(training_images)
 
-#sys.exit()
-print (X_train.shape)
-print (Y_train.shape)
-my_net.train(X_train,Y_train,learning_rate = 0.0001, num_epochs = 70, minibatch_size = 32)
-        
+my_net.train(X_train,Y_train,learning_rate = 0.0001, num_epochs = 200, minibatch_size = 32)
+
+ntest = 1000
+test_images,Y_test = sim(ntest,ny,nx,num_outputs)
+X_test = prepare(test_images)
+
+
+print (Y_test)
+Y_pred = my_net.predict(X_test)
+Y_rand = np.random.uniform(1,10,size=(num_outputs,ntest))
+
+err = (Y_pred-Y_test)
+err_rand = (Y_rand-Y_test)
+plt.clf()
+plt.scatter(err_rand[0,:],err_rand[1,:],alpha=0.1)
+plt.scatter(err[0,:],err[1,:])
+plt.axvline(x=0.,ls="--")
+plt.axhline(y=0.,ls="--")
+plt.xlim(-10,10)
+plt.ylim(-10,10)
+plt.savefig("scatter.png")

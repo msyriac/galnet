@@ -52,7 +52,7 @@ class FeedForward(object):
     with arbitrary number of layers.
     """
     
-    def __init__(self,num_features,num_nodes=[64,32],activations=["relu","relu"],num_outputs=2,seed=None):
+    def __init__(self,num_features,num_nodes=[64,32],activations=None,num_outputs=2,seed=None):
 
         
         self.X = tf.placeholder("float", shape=(num_features,None),name="X")
@@ -60,6 +60,8 @@ class FeedForward(object):
         self.num_features = num_features
         self.num_outputs = num_outputs
 
+        if activations is None:
+            activations = ["relu"]*len(num_nodes)
         num_nodes.append(num_outputs)
         activations.append("none")
         
@@ -190,7 +192,7 @@ img = training_images[:,:,0]
 import orphics.tools.io as io
 io.quickPlot2d(img,"img.png")
 Npix = img.size
-my_net = FeedForward(num_features=Npix,num_outputs=num_outputs,num_nodes=[64,16])
+my_net = FeedForward(num_features=Npix,num_outputs=num_outputs,num_nodes=[64,32])
 
 
 X_train = prepare(training_images)

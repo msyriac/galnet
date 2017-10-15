@@ -185,7 +185,7 @@ class FeedForward(object):
             mse = sess.run(cost,feed_dict={self.X:X_test,self.Y:Y_test})
         return mse
         
-def prepare(images):
+def prepare(images,pca=None):
     from sklearn.preprocessing import StandardScaler
 
     assert images.ndim==3
@@ -196,6 +196,16 @@ def prepare(images):
     scaler = StandardScaler()
     std_scale = scaler.fit(images)
     scaled = std_scale.transform(images)
+
+
+    if pca:
+        from sklearn.decomposition import PCA
+
+        pca = PCA(n_components=pca).fit(scaled.T)
+        scaled = pca.transform(scaled.T)
+        return scaled.T
+
+    
     return scaled
 
 def sim_tile(num_images,ny=32,nx=32,num_outputs=2):
@@ -246,15 +256,17 @@ def sim_gal(num_images,ny,nx,seed=None):
 num_outputs = 2 # the two ellipticity components
 m = 50000
 ny = nx = 32
-num_nodes = [24]
+num_nodes = [64]
 activations = None #[] #None 
-beta = 0. #005
+beta = 0.01
 mini_batch_size = 128
-learning_rate = 0.0001
+learning_rate = 0.001
 num_epochs = int(1e9)
+pca = 500
+Npix = pca if pca else ny*nx
 
 alpha_scale = 2
-optimal_hidden = int(m*1./(alpha_scale*(num_outputs+ny*nx)))
+optimal_hidden = int(m*1./(alpha_scale*(num_outputs+Npix)))
 print ("Optimal number of hidden layers : ",optimal_hidden)
 
 #training_images,Y_train, Ytrain_bayes = sim(m,ny,nx,num_outputs)
@@ -263,17 +275,19 @@ training_images,Y_train, Ytrain_bayes = sim_gal(m,ny,nx,seed=100)
 img = training_images[:,:,0]
 io.quickPlot2d(img,"img.png")
 
-Npix = img.size
 my_net = FeedForward(num_features=Npix,num_outputs=num_outputs,num_nodes=num_nodes,activations=activations)
 
 
-X_train = prepare(training_images)
+X_train = prepare(training_images,pca)
+
+
+
 my_net.train(X_train,Y_train,learning_rate = learning_rate, num_epochs = num_epochs,minibatch_size = mini_batch_size,beta=beta)
 
 ntest = 1000
 test_images,Y_test, Ytest_bayes = sim_gal(ntest,ny,nx,seed=200)
 #test_images,Y_test, Ytest_bayes = sim(ntest,ny,nx,num_outputs)
-X_test = prepare(test_images)
+X_test = prepare(test_images,pca)
 
 
 Y_pred_train = my_net.predict(X_train)
@@ -299,7 +313,7 @@ err_test = (Y_pred_test-Y_test)
 plt.clf()
 #plt.scatter(err_rand[0,:],err_rand[1,:],alpha=0.1)
 plt.scatter(err_test[0,:],err_test[1,:])
-plt.scatter(err_train[0,:],err_train[1,:],alpha=0.3)
+plt.scatter(err_train[0,:],err_train[1,:],alpha=0.1)
 #plt.scatter(err_bayes[0,:],err_bayes[1,:],alpha=0.1)
 plt.axvline(x=0.,ls="--")
 plt.axhline(y=0.,ls="--")
